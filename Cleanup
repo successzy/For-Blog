@@ -1,0 +1,45 @@
+# 删除CloudFormation创建的资源
+
+# 删除资源，对应# 13. 创建用于访问源站Amazon S3的AKSK并存入Secrets Manager
+aws secretsmanager delete-secret --region cn-northwest-1 --secret-id BlogSecret
+aws iam delete-access-key --access-key-id "" --user-name blog-user
+aws iam detach-user-policy --user-name blog-user --policy-arn arn:aws-cn:iam::aws:policy/AmazonS3FullAccess
+aws iam delete-user --user-name blog-user
+
+# 删除资源，对应#12. 创建Amazon S3桶
+清空Amazon S3桶，并删除Amazon S3桶
+
+# 删除资源，对应# 11. 上传镜像
+aws ecr delete-repository --repository-name myblogimage --region cn-northwest-1
+
+# 删除资源，对应# 9.4 创建Proxy实例
+aws ec2 terminate-instances --region cn-north-1 --instance-ids $proxy_instanceid_az2
+
+# 删除资源，对应# 9.3 生成自定义镜像
+aws ec2 deregister-image --region cn-north-1 --image-id $proxy_image_id
+
+# 删除资源，对应# 8. 新建ECS集群
+aws ecs create-cluster --region cn-northwest-1 --cluster-name dth-ecs-cluster
+
+# 删除资源，对应# 7. 创建Endpoint
+for i in $(aws ec2 describe-vpc-endpoints --region cn-northwest-1 --filter "Name=vpc-id,Values=$ningxia_vpc_id" --query "VpcEndpoints[].VpcEndpointId" --output text); do aws ec2 delete-vpc-endpoints --vpc-endpoint-ids "$i" --region cn-northwest-1; done
+for i in $(aws ec2 describe-vpc-endpoints --region cn-north-1 --filter "Name=vpc-id,Values=$beijing_vpc_id" --query "VpcEndpoints[].VpcEndpointId" --output text); do aws ec2 delete-vpc-endpoints --vpc-endpoint-ids "$i" --region cn-north-1; done
+
+# 删除资源，对应# 6. 创建Peering Gateway
+aws ec2 delete-route --region cn-northwest-1 --route-table-id $ningxia_route_table_id --destination-cidr-block 172.17.0.0/16
+aws ec2 delete-route --region cn-north-1 --route-table-id $beijing_route_table_id --destination-cidr-block 10.0.0.0/16
+aws ec2 delete-vpc-peering-connection --region cn-northwest-1 --vpc-peering-connection-id $vpc_peering_connection_id
+
+# 删除资源，对应# 3. 创建路由表
+for i in $(aws ec2 describe-route-tables --region cn-northwest-1 --filter "Name=vpc-id,Values=$ningxia_vpc_id" --query "RouteTables[].RouteTableId" --output text); do aws ec2 delete-route-table --region cn-northwest-1 --route-table-id $i; done
+for i in $(aws ec2 describe-route-tables --region cn-north-1 --filter "Name=vpc-id,Values=$beijing_vpc_id" --query "RouteTables[].RouteTableId" --output text); do aws ec2 delete-route-table --region cn-north-1 --route-table-id $i; done
+
+# 删除资源，对应#2. 创建Subnet
+aws ec2 delete-subnet --region cn-north-1 --subnet-id $beijing_subnet_id_az2
+aws ec2 delete-subnet --region cn-northwest-1 --subnet-id $ningxia_subnet_id_az1
+aws ec2 delete-subnet --region cn-northwest-1 --subnet-id $ningxia_subnet_id_az2
+aws ec2 delete-subnet --region cn-northwest-1 --subnet-id $ningxia_subnet_id_az3
+
+# 删除资源，对应# 1. 创建VPC
+aws ec2 delete-vpc --region cn-northwest-1 --vpc-id $ningxia_vpc_id
+aws ec2 delete-vpc --region cn-north-1 --vpc-id $beijing_vpc_id
