@@ -1,0 +1,30 @@
+# 删除资源，对应# 10
+# 解绑并释放EIP
+count=1; for i in $private_ip_list;
+do
+  aws ec2 disassociate-address --association-id ${association_id_list[$count]} --region cn-northwest-1
+  aws ec2 release-address --allocation-id ${allocation_id_list[$count]} --region cn-northwest-1
+  ((count++));
+done
+# 删除私网地址
+aws ec2 unassign-private-ip-addresses --region cn-northwest-1 --network-interface-id $network_interface_id --private-ip-addresses  $private_ip_list
+
+# 删除资源，对应# 8, 9
+aws ec2 terminate-instances --region cn-northwest-1 --instance-ids $proxy_instance_id
+aws ec2 wait instance-terminated --region cn-northwest-1 --instance-ids $proxy_instance_id
+aws ec2 terminate-instances --region cn-northwest-1 --instance-ids $business_instance_id
+aws ec2 wait instance-terminated --region cn-northwest-1 --instance-ids $business_instance_id
+
+# 删除资源，对应#2. 创建Subnet
+aws ec2 delete-subnet --region cn-northwest-1 --subnet-id $ningxia_subnet_az1_id1
+aws ec2 delete-subnet --region cn-northwest-1 --subnet-id $ningxia_subnet_az1_id2
+
+# 删除资源，对应# 3. 创建路由表
+for i in $(aws ec2 describe-route-tables --region cn-northwest-1 --filter "Name=vpc-id,Values=$ningxia_vpc_id" --query "RouteTables[].RouteTableId" --output text); do aws ec2 delete-route-table --region cn-northwest-1 --route-table-id $i; done
+
+# 删除资源，对应# 6. 创建并附加Internet Gateway
+aws ec2 detach-internet-gateway --internet-gateway-id $internet_gateway_id_ningxia --vpc-id $ningxia_vpc_id --region cn-northwest-1
+aws ec2 delete-internet-gateway --internet-gateway-id $internet_gateway_id_ningxia --region cn-northwest-1
+
+# 删除资源，对应# 1. 创建VPC
+aws ec2 delete-vpc --region cn-northwest-1 --vpc-id $ningxia_vpc_id

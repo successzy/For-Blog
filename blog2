@@ -1,0 +1,206 @@
+# 0. 进入screen模式，以保证环境变量不会因为退出Session而消失
+screen
+
+# 1. 创建VPC1和VPC2
+ningxia_vpc1_id=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --region cn-northwest-1 --query "Vpc.VpcId" --output text)
+ningxia_vpc2_id=$(aws ec2 create-vpc --cidr-block 172.31.0.0/16 --region cn-northwest-1 --query "Vpc.VpcId" --output text)
+
+# 2. 创建Subnet
+# 2.1 创建VPC1的子网
+# 在AZ1中创建vpc1_ningxia_subnet_az1_id1（私有子网1）
+vpc1_ningxia_subnet_az1_id1=$(aws ec2 create-subnet --cidr-block 10.0.0.0/24 --vpc-id $ningxia_vpc1_id --region cn-northwest-1 --availability-zone cn-northwest-1a --query "Subnet.SubnetId" --output text)
+# 2.2 创建VPC2的子网
+# 在AZ1中创建vpc2_ningxia_subnet_az1_id1（私有子网1）
+vpc2_ningxia_subnet_az1_id1=$(aws ec2 create-subnet --cidr-block 172.31.0.0/24 --vpc-id $ningxia_vpc2_id --region cn-northwest-1 --availability-zone cn-northwest-1a --query "Subnet.SubnetId" --output text)
+# 在AZ2中创建vpc2_ningxia_subnet_az2_id2（私有子网2）
+vpc2_ningxia_subnet_az2_id2=$(aws ec2 create-subnet --cidr-block 172.31.1.0/24 --vpc-id $ningxia_vpc2_id --region cn-northwest-1 --availability-zone cn-northwest-1b --query "Subnet.SubnetId" --output text)
+# 在AZ1中创建vpc2_ningxia_subnet_az1_id3（公有子网1）
+vpc2_ningxia_subnet_az1_id3=$(aws ec2 create-subnet --cidr-block 172.31.2.0/24 --vpc-id $ningxia_vpc2_id --region cn-northwest-1 --availability-zone cn-northwest-1a --query "Subnet.SubnetId" --output text)
+# 在AZ2中创建vpc2_ningxia_subnet_az2_id4（公有子网2）
+vpc2_ningxia_subnet_az2_id4=$(aws ec2 create-subnet --cidr-block 172.31.3.0/24 --vpc-id $ningxia_vpc2_id --region cn-northwest-1 --availability-zone cn-northwest-1b --query "Subnet.SubnetId" --output text)
+
+# 3. 创建路由表
+# 3.1 创建VPC1的路由表
+# 创建vpc1_ningxia_route_table_id1（私有子网路由表）
+vpc1_ningxia_route_table_id1=$(aws ec2 create-route-table --vpc-id $ningxia_vpc1_id --region cn-northwest-1 --query "RouteTable.RouteTableId" --output text)
+# 3.2 创建VPC2的路由表
+# 创建vpc2_ningxia_route_table_id1（私有子网路由表）
+vpc2_ningxia_route_table_id1=$(aws ec2 create-route-table --vpc-id $ningxia_vpc2_id --region cn-northwest-1 --query "RouteTable.RouteTableId" --output text)
+# 创建vpc2_ningxia_route_table_id2（公有子网路由表）
+vpc2_ningxia_route_table_id2=$(aws ec2 create-route-table --vpc-id $ningxia_vpc2_id --region cn-northwest-1 --query "RouteTable.RouteTableId" --output text)
+
+# 4. 更改子网路由表
+# 4.1 更改VPC1中的子网路由表
+aws ec2 associate-route-table --route-table-id $vpc1_ningxia_route_table_id1 --subnet-id $vpc1_ningxia_subnet_az1_id1 --region cn-northwest-1
+# 4.2 更改VPC2中的子网路由表
+# 4.2.1 更改VPC2中的私有子网路由表
+aws ec2 associate-route-table --route-table-id $vpc2_ningxia_route_table_id1 --subnet-id $vpc2_ningxia_subnet_az1_id1 --region cn-northwest-1
+aws ec2 associate-route-table --route-table-id $vpc2_ningxia_route_table_id1 --subnet-id $vpc2_ningxia_subnet_az2_id2 --region cn-northwest-1
+# 4.2.2 更改VPC2中的公有子网路由表
+aws ec2 associate-route-table --route-table-id $vpc2_ningxia_route_table_id2 --subnet-id $vpc2_ningxia_subnet_az1_id3 --region cn-northwest-1
+aws ec2 associate-route-table --route-table-id $vpc2_ningxia_route_table_id2 --subnet-id $vpc2_ningxia_subnet_az2_id4 --region cn-northwest-1
+
+# 5. 修改安全组
+# 5.1 修改VPC1的安全组
+# 获取VPC1的groupid
+vpc1_groupid_ningxia=$(aws ec2 describe-security-groups --region cn-northwest-1 --filter "Name=vpc-id,Values=$ningxia_vpc1_id" --query "SecurityGroups[].GroupId" --output text)
+# 基于获取的groupid，修改安全组
+aws ec2 authorize-security-group-ingress --group-id "$vpc1_groupid_ningxia" --protocol all --port all --cidr "0.0.0.0/0" --region cn-northwest-1
+# 5.2 修改VPC2的安全组
+# 获取VPC2的groupid
+vpc2_groupid_ningxia=$(aws ec2 describe-security-groups --region cn-northwest-1 --filter "Name=vpc-id,Values=$ningxia_vpc2_id" --query "SecurityGroups[].GroupId" --output text)
+# 基于获取的groupid，修改安全组
+aws ec2 authorize-security-group-ingress --group-id "$vpc2_groupid_ningxia" --protocol all --port all --cidr "0.0.0.0/0" --region cn-northwest-1
+
+# 6. 创建并附加Internet Gateway
+# 6.1 VPC1中创建并附加Internet Gateway
+vpc1_internet_gateway_id_ningxia=$(aws ec2 create-internet-gateway --region cn-northwest-1 --query "InternetGateway.InternetGatewayId" --output text)
+aws ec2 attach-internet-gateway --region cn-northwest-1 --internet-gateway-id $vpc1_internet_gateway_id_ningxia --vpc-id $ningxia_vpc1_id
+# 6.2 VPC2中创建并附加Internet Gateway
+vpc2_internet_gateway_id_ningxia=$(aws ec2 create-internet-gateway --region cn-northwest-1 --query "InternetGateway.InternetGatewayId" --output text)
+aws ec2 attach-internet-gateway --region cn-northwest-1 --internet-gateway-id $vpc2_internet_gateway_id_ningxia --vpc-id $ningxia_vpc2_id
+
+# 7. 修改路由表
+# 7.1 修改VPC1中的路由表
+aws ec2 create-route --destination-cidr-block 0.0.0.0/0 --gateway-id $vpc1_internet_gateway_id_ningxia --region cn-northwest-1 --route-table-id $vpc1_ningxia_route_table_id1
+# 7.2 修改VPC2中的路由表
+aws ec2 create-route --destination-cidr-block 0.0.0.0/0 --gateway-id $vpc2_internet_gateway_id_ningxia --region cn-northwest-1 --route-table-id $vpc2_ningxia_route_table_id1
+aws ec2 create-route --destination-cidr-block 0.0.0.0/0 --gateway-id $vpc2_internet_gateway_id_ningxia --region cn-northwest-1 --route-table-id $vpc2_ningxia_route_table_id2
+
+# 8. 创建Peering Connection
+vpc_peering_connection_id=$(aws ec2 create-vpc-peering-connection --region cn-northwest-1 --vpc-id $ningxia_vpc1_id --peer-vpc-id $ningxia_vpc2_id --peer-region cn-northwest-1 --query "VpcPeeringConnection.VpcPeeringConnectionId" --output text)
+aws ec2 accept-vpc-peering-connection --region cn-northwest-1 --vpc-peering-connection-id $vpc_peering_connection_id --query "VpcPeeringConnection.VpcPeeringConnectionId" --output text
+# 8.1 添加路由，使VPC1和VPC2可以互通
+aws ec2 create-route --region cn-northwest-1 --route-table-id $vpc1_ningxia_route_table_id1 --destination-cidr-block 172.31.0.0/16 --vpc-peering-connection-id $vpc_peering_connection_id
+aws ec2 create-route --region cn-northwest-1 --route-table-id $vpc2_ningxia_route_table_id1 --destination-cidr-block 10.0.0.0/16 --vpc-peering-connection-id $vpc_peering_connection_id
+
+# 9. 创建Nginx
+# 9.1 创建Nginx1
+nginx_id1=$(aws ec2 run-instances --region cn-northwest-1 --image-id resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --instance-type t3.micro --key-name id_rsa_test.pub --security-group-ids $vpc2_groupid_ningxia --subnet-id $vpc2_ningxia_subnet_az1_id3 --associate-public-ip-address --query 'Instances[].InstanceId' --output text)
+# 等待实例创建完成
+aws ec2 wait instance-status-ok --instance-ids $nginx_id1 --region cn-northwest-1
+# 获得nginx_ip1
+nginx_ip1=$(aws ec2 describe-instances --instance-ids "$nginx_id1" --region cn-northwest-1 --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+# 9.2 创建Nginx2
+nginx_id2=$(aws ec2 run-instances --region cn-northwest-1 --image-id resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --instance-type t3.micro --key-name id_rsa_test.pub --security-group-ids $vpc2_groupid_ningxia --subnet-id $vpc2_ningxia_subnet_az2_id4 --associate-public-ip-address --query 'Instances[].InstanceId' --output text)
+# 等待实例创建完成
+aws ec2 wait instance-status-ok --instance-ids $nginx_id2 --region cn-northwest-1
+# 获得nginx_ip2
+nginx_ip2=$(aws ec2 describe-instances --instance-ids "$nginx_id2" --region cn-northwest-1 --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+
+# 10. 创建业务服务器1
+business_instance_id=$(aws ec2 run-instances --region cn-northwest-1 --image-id resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --instance-type t3.micro --key-name id_rsa_test.pub --security-group-ids $vpc1_groupid_ningxia --subnet-id $vpc1_ningxia_subnet_az1_id1 --associate-public-ip-address --query 'Instances[].InstanceId' --output text)
+# 等待实例创建完成
+aws ec2 wait instance-status-ok --instance-ids $business_instance_id --region cn-northwest-1
+# 获得business_instance_ip
+business_instance_ip=$(aws ec2 describe-instances --instance-ids "$business_instance_id" --region cn-northwest-1 --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+
+# 11. 创建和配置NLB
+# 创建目标组
+target_group_arn=$(aws elbv2 create-target-group --name my-targets --protocol TCP --port 443 --target-type instance --vpc-id $ningxia_vpc2_id --region cn-northwest-1 --query "TargetGroups[].TargetGroupArn" --output text)
+# 注册实例
+aws elbv2 register-targets --target-group-arn $target_group_arn --targets Id=$nginx_id1,Port=443 --region cn-northwest-1
+aws elbv2 register-targets --target-group-arn $target_group_arn --targets Id=$nginx_id2,Port=443 --region cn-northwest-1
+# 创建NLB
+load_balancer_arn=$(aws elbv2 create-load-balancer --name my-load-balancer --scheme internal --type network --subnets $vpc2_ningxia_subnet_az1_id1 $vpc2_ningxia_subnet_az2_id2 --region cn-northwest-1 --query LoadBalancers[].LoadBalancerArn --output text)
+# 等待NLB创建完成
+aws elbv2 wait load-balancer-available --load-balancer-arns $load_balancer_arn --region cn-northwest-1
+# 创建ALB监听器
+listener_arn=$(aws elbv2 create-listener --load-balancer-arn $load_balancer_arn --protocol TCP --port 443 --default-actions Type=forward,TargetGroupArn=$target_group_arn --region cn-northwest-1 --query "Listeners[].ListenerArn" --output text)
+
+# 12. 创建和配置Private Hosted Zone
+private_hosted_zone_id=$(aws route53 create-hosted-zone --name baidu.com --vpc VPCRegion=cn-northwest-1,VPCId=$ningxia_vpc1_id --caller-reference "`date '+%Y_%m_%d %H:%M:%S'`" --hosted-zone-config Comment="ForBlog",PrivateZone=true --query "HostedZone.Id" --output text)
+
+echo $load_balancer_arn
+aws elbv2 describe-load-balancers --query 'LoadBalancers[?LoadBalancerArn==`arn:aws-cn:elasticloadbalancing:cn-northwest-1:332433839685:loadbalancer/net/my-load-balancer/503cc27dc92ff737`][DNSName,CanonicalHostedZoneId]' # 问号后面填写上一个命令的输出，并将这个命令的输出作为值填入sample.json中的HostedZoneId和DNSName项
+
+cat > sample.json << EOF
+{
+  "Comment": "Creating Alias resource record sets in Route 53",
+  "Changes": [
+    {
+      "Action": "CREATE",
+      "ResourceRecordSet": {
+        "Name": "www.baidu.com",
+        "Type": "A",
+        "AliasTarget": {
+          "HostedZoneId": "ZQEIKTCZ8352D",
+          "DNSName": "my-load-balancer-503cc27dc92ff737.elb.cn-northwest-1.amazonaws.com.cn",
+          "EvaluateTargetHealth": false
+        }
+      }
+    }
+  ]
+}
+EOF
+
+aws route53 change-resource-record-sets --hosted-zone-id $private_hosted_zone_id --change-batch file://sample.json # 劫持www.baidu.com的dns请求，并指向NLB的域名
+
+------------------------------------------------------------------------------------------
+# 删除资源，对应12. 创建和配置Private Hosted Zone
+cat > sample.json << EOF
+{
+  "Comment": "Creating Alias resource record sets in Route 53",
+  "Changes": [
+    {
+      "Action": "DELETE",
+      "ResourceRecordSet": {
+        "Name": "www.baidu.com",
+        "Type": "A",
+        "AliasTarget": {
+          "HostedZoneId": "ZQEIKTCZ8352D",
+          "DNSName": "my-load-balancer-503cc27dc92ff737.elb.cn-northwest-1.amazonaws.com.cn",
+          "EvaluateTargetHealth": false
+        }
+      }
+    }
+  ]
+}
+EOF
+aws route53 change-resource-record-sets --hosted-zone-id $private_hosted_zone_id --change-batch file://sample.json
+aws route53 delete-hosted-zone --id $private_hosted_zone_id
+
+# 删除资源，对应# 11. 创建和配置NLB
+aws elbv2 delete-listener --region cn-northwest-1 --listener-arn $listener_arn
+aws elbv2 delete-load-balancer --load-balancer-arn $load_balancer_arn --region cn-northwest-1
+aws elbv2 wait load-balancers-deleted --load-balancer-arn $load_balancer_arn --region cn-northwest-1
+aws elbv2 deregister-targets --target-group-arn $target_group_arn --targets Id=$nginx_id1,Port=443 --region cn-northwest-1
+aws elbv2 deregister-targets --target-group-arn $target_group_arn --targets Id=$nginx_id2,Port=443 --region cn-northwest-1
+aws elbv2 delete-target-group --target-group-arn $target_group_arn --region cn-northwest-1
+
+
+# 删除资源，对应10. 创建业务服务器1
+aws ec2 terminate-instances --region cn-northwest-1 --instance-ids $business_instance_id
+aws ec2 wait instance-terminated --region cn-northwest-1 --instance-ids $business_instance_id
+
+# 删除资源，对应# 9 创建Nginx实例
+aws ec2 terminate-instances --region cn-northwest-1 --instance-ids $nginx_id1
+aws ec2 wait instance-terminated --region cn-northwest-1 --instance-ids $nginx_id1
+aws ec2 terminate-instances --region cn-northwest-1 --instance-ids $nginx_id2
+aws ec2 wait instance-terminated --region cn-northwest-1 --instance-ids $nginx_id2
+
+# 删除资源，对应# 8. 创建Peering Connection
+aws ec2 delete-route --region cn-northwest-1 --route-table-id $vpc1_ningxia_route_table_id1 --destination-cidr-block 172.31.0.0/16
+aws ec2 delete-route --region cn-northwest-1 --route-table-id $vpc2_ningxia_route_table_id1 --destination-cidr-block 10.0.0.0/16
+aws ec2 delete-vpc-peering-connection --region cn-northwest-1 --vpc-peering-connection-id $vpc_peering_connection_id
+
+# 删除资源，对应#2. 创建Subnet
+aws ec2 delete-subnet --region cn-northwest-1 --subnet-id $vpc1_ningxia_subnet_az1_id1
+aws ec2 delete-subnet --region cn-northwest-1 --subnet-id $vpc2_ningxia_subnet_az1_id1
+aws ec2 delete-subnet --region cn-northwest-1 --subnet-id $vpc2_ningxia_subnet_az2_id2
+aws ec2 delete-subnet --region cn-northwest-1 --subnet-id $vpc2_ningxia_subnet_az1_id3
+aws ec2 delete-subnet --region cn-northwest-1 --subnet-id $vpc2_ningxia_subnet_az2_id4
+
+# 删除资源，对应# 3. 创建路由表
+for i in $(aws ec2 describe-route-tables --region cn-northwest-1 --filter "Name=vpc-id,Values=$ningxia_vpc1_id" --query "RouteTables[].RouteTableId" --output text); do aws ec2 delete-route-table --region cn-northwest-1 --route-table-id $i; done
+for i in $(aws ec2 describe-route-tables --region cn-northwest-1 --filter "Name=vpc-id,Values=$ningxia_vpc2_id" --query "RouteTables[].RouteTableId" --output text); do aws ec2 delete-route-table --region cn-northwest-1 --route-table-id $i; done
+
+# 删除资源，对应# 6. 创建并附加Internet Gateway
+aws ec2 detach-internet-gateway --internet-gateway-id $vpc1_internet_gateway_id_ningxia --vpc-id $ningxia_vpc1_id --region cn-northwest-1
+aws ec2 delete-internet-gateway --internet-gateway-id $vpc1_internet_gateway_id_ningxia --region cn-northwest-1
+aws ec2 detach-internet-gateway --internet-gateway-id $vpc2_internet_gateway_id_ningxia --vpc-id $ningxia_vpc2_id --region cn-northwest-1
+aws ec2 delete-internet-gateway --internet-gateway-id $vpc2_internet_gateway_id_ningxia --region cn-northwest-1
+
+# 删除资源，对应# 1. 创建VPC
+aws ec2 delete-vpc --region cn-northwest-1 --vpc-id $ningxia_vpc1_id
+aws ec2 delete-vpc --region cn-northwest-1 --vpc-id $ningxia_vpc2_id
