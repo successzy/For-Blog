@@ -1,0 +1,220 @@
+2. 创建Demo用SQS
+export QUEUE_NAME=keda-queue
+export CLUSTER_NAME=$(eksctl get clusters -o json | jq -r '.[0].Name')
+export ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account)
+export AWS_REGION=$(curl -s 169.254.169.254/latest/dynamic/instance-identity/document | jq -r '.region')
+
+export QueueURL=$(aws sqs create-queue \
+  --queue-name=$QUEUE_NAME \
+  --region=$AWS_REGION \
+  --output=text \
+  --query=QueueUrl)
+
+3. 生成IRSA (IAM Roles for Service Account)
+3.1 创建namespace
+kubectl create namespace keda
+
+3.2 创建IAM Policy
+mkdir -p ~/environment/keda && cd ~/environment/keda
+
+cat <<EoF > ~/environment/keda/keda-policy.json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": "sqs:*",
+            "Resource": "arn:aws:sqs:${AWS_REGION}:${ACCOUNT_ID}:${QUEUE_NAME}"
+        }
+    ]
+}
+EoF
+
+aws iam create-policy   \
+  --policy-name AmazonSQSPolicy \
+  --policy-document file://~/environment/keda/keda-policy.json
+
+3.3 创建KEDA SA
+eksctl create iamserviceaccount \
+    --name keda-operator\
+    --namespace keda \
+    --cluster ${CLUSTER_NAME} \
+    --attach-policy-arn "arn:aws:iam::${ACCOUNT_ID}:policy/AmazonSQSPolicy" \
+    --role-name KEDA-SQS \
+    --approve \
+    --override-existing-serviceaccounts
+
+4. 构建Demo用镜像
+public.ecr.aws/u1t4n1f6/keda-demo:latest
+
+5. 通过Helm安装KEDA
+helm repo add kedacore https://kedacore.github.io/charts
+helm repo update
+
+KEDA_VERSION=2.9.0
+
+helm install keda kedacore/keda \
+    --version ${KEDA_VERSION} \
+    --set serviceAccount.create=false \
+    --set serviceAccount.name=keda-operator \
+    --set podSecurityContext.fsGroup=1001 \
+    --set podSecurityContext.runAsGroup=1001 \
+    --set podSecurityContext.runAsUser=1001  \
+    --namespace keda
+
+6. 部署ScaledJob并进行扩缩容验证
+apiVersion: keda.sh/v1alpha1
+kind: ScaledJob
+metadata:
+  name: scaled-job-scaler
+  namespace: keda
+spec:
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 5
+  maxReplicaCount: 10
+  rolloutStrategy: gradual
+  scalingStrategy:
+    strategy: "default"
+  triggers:
+  - type: aws-sqs-queue
+    metadata:
+      queueURL: "https://sqs.ap-northeast-2.amazonaws.com/062030352194/keda-queue"
+      queueLength: "1"
+      awsRegion: "ap-northeast-2"
+      identityOwner: Operator
+      scaleOnInFlight: "false"
+  jobTargetRef:
+    parallelism: 1
+    completions: 1
+    backoffLimit: 5
+    template:
+      spec:
+        containers:
+        - name: keda-demo-job
+          image: public.ecr.aws/u1t4n1f6/keda-demo:latest
+          resources:
+            requests:
+              cpu: 1
+        restartPolicy: Never
+        serviceAccountName: keda-operator
+        affinity:
+          nodeAffinity:  
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - key: intent
+                  operator: In
+                  values:
+                  - apps
+
+7. 通过Helm安装Karpenter
+# 资源打标签--->Key="karpenter.sh/discovery",Value="my-cluster"--->Value需要修改
+1. 子网--->如果现有工作节点属于私有子网，直接给私有子网打标签
+2. 安全组
+
+# 设置环境变量
+export AWS_PARTITION="aws" # if you are not using standard partitions, you may need to configure to aws-cn / aws-us-gov
+export CLUSTER_NAME="my-cluster"
+export AWS_DEFAULT_REGION="ap-northeast-2"
+export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+export TEMPOUT=$(mktemp)
+
+# 验证环境变量
+echo $KARPENTER_VERSION $CLUSTER_NAME $AWS_DEFAULT_REGION $AWS_ACCOUNT_ID $TEMPOUT
+
+# 执行Cloudformation模板，创建必要资源
+curl -fsSL https://raw.githubusercontent.com/aws/karpenter/"${KARPENTER_VERSION}"/website/content/en/preview/getting-started/getting-started-with-karpenter/cloudformation.yaml  > $TEMPOUT \
+&& aws cloudformation deploy \
+  --stack-name "Karpenter-${CLUSTER_NAME}" \
+  --template-file "${TEMPOUT}" \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides "ClusterName=${CLUSTER_NAME}"
+  
+# 给实例授权使其可以使用之前创建的profile来连接eks集群
+eksctl create iamidentitymapping \
+  --username system:node:{{EC2PrivateDNSName}} \
+  --cluster "${CLUSTER_NAME}" \
+  --arn "arn:aws:iam::${AWS_ACCOUNT_ID}:role/KarpenterNodeRole-${CLUSTER_NAME}" \
+  --group system:bootstrappers \
+  --group system:nodes
+  
+# 检查AWS auth map
+kubectl describe configmap -n kube-system aws-auth  
+
+# 创建IAM OIDC Identity Provider for the cluster
+eksctl utils associate-iam-oidc-provider --cluster ${CLUSTER_NAME} --approve
+
+# 创建AWS IAM Role, Kubernetes service account, 并使用IAM Roles for Service Accounts (IRSA)
+eksctl create iamserviceaccount \
+  --cluster "${CLUSTER_NAME}" --name karpenter --namespace karpenter \
+  --role-name "${CLUSTER_NAME}-karpenter" \
+  --attach-policy-arn "arn:aws-cn:iam::${AWS_ACCOUNT_ID}:policy/KarpenterControllerPolicy-${CLUSTER_NAME}" \
+  --role-only \
+  --approve
+
+export CLUSTER_ENDPOINT="$(aws eks describe-cluster --name ${CLUSTER_NAME} --query "cluster.endpoint" --output text)"
+export KARPENTER_IAM_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${CLUSTER_NAME}-karpenter"
+      
+# 创建可用于Spot实例的Service Linked Role
+aws iam create-service-linked-role --aws-service-name spot.amazonaws.com || true
+
+# 安装Karpenter
+docker logout public.ecr.aws
+
+helm upgrade --install karpenter oci://public.ecr.aws/karpenter/karpenter --version ${KARPENTER_VERSION} --namespace karpenter --create-namespace \
+  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=${KARPENTER_IAM_ROLE_ARN} \
+  --set settings.aws.clusterName=${CLUSTER_NAME} \
+  --set settings.aws.defaultInstanceProfile=KarpenterNodeInstanceProfile-${CLUSTER_NAME} \
+  --set settings.aws.interruptionQueueName=${CLUSTER_NAME} \
+  --set controller.resources.requests.cpu=1 \
+  --set controller.resources.requests.memory=1Gi \
+  --set controller.resources.limits.cpu=1 \
+  --set controller.resources.limits.memory=1Gi \
+  --wait
+      
+# 创建Provisioner--->按需求加上资源限制
+cat <<EOF | kubectl apply -f -
+apiVersion: karpenter.sh/v1alpha5
+kind: Provisioner
+metadata:
+  name: default
+spec:
+  labels:
+    intent: apps
+  requirements:
+    - key: karpenter.sh/capacity-type
+      operator: In
+      values: ["spot"]
+    - key: "karpenter.k8s.aws/instance-category"
+      operator: In
+      values: ["c"]
+    - key: "karpenter.k8s.aws/instance-cpu"
+      operator: In
+      values: ["4"]
+    - key: "karpenter.k8s.aws/instance-hypervisor"
+      operator: In
+      values: ["nitro"]
+    - key: karpenter.k8s.aws/instance-generation
+      operator: Gt
+      values: ["2"]
+    - key: "kubernetes.io/arch"
+      operator: In
+      values: ["amd64"]
+  limits:
+    resources:
+      cpu: 1000
+  providerRef:
+    name: default
+  ttlSecondsAfterEmpty: 30
+---
+apiVersion: karpenter.k8s.aws/v1alpha1
+kind: AWSNodeTemplate
+metadata:
+  name: default
+spec:
+  subnetSelector:
+    karpenter.sh/discovery: ${CLUSTER_NAME}
+  securityGroupSelector:
+    karpenter.sh/discovery: ${CLUSTER_NAME}
+EOF
+
